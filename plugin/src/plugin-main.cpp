@@ -30,8 +30,8 @@ filter_audio 는 입력 PCM 을 변형 없이 그대로 반환(방송 원본 불
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
-#define UP_RATE 16000     /* 서버/Gemini 입력 레이트 */
-#define CHUNK_BYTES 3200  /* 100ms @ 16kHz s16 mono */
+/* 입력 레이트는 선택 엔진에 따라 동적: Gemini 16k / OpenAI 24k.
+ * 100ms 청크(s16 mono) = rate/1000 * 100 * 2 = rate/5 바이트. 기본값은 struct 초기화 참고. */
 
 struct interpreter_filter {
 	obs_source_t *context = nullptr;
@@ -39,9 +39,14 @@ struct interpreter_filter {
 	/* 설정 */
 	std::string server_url;   /* 예: ws://localhost:8000 (베이스) */
 	std::string service_key;
+	std::string engine;       /* "gemini" | "openai" */
 	std::atomic<bool> enabled{false};
 
-	/* 48k float planar(Nch) -> 16k s16 mono 리샘플러 */
+	/* 입력 레이트/청크는 엔진에 따라 동적(Gemini 16k·3200B / OpenAI 24k·4800B) */
+	std::atomic<uint32_t> up_rate{16000};
+	std::atomic<size_t> chunk_bytes{3200};
+
+	/* 48k float planar(Nch) -> up_rate s16 mono 리샘플러 */
 	audio_resampler_t *resampler = nullptr;
 	std::mutex resampler_mtx;
 
@@ -113,17 +118,18 @@ static void interpreter_toggle_hotkey(void *data, obs_hotkey_id id, obs_hotkey_t
 static void worker_fn(interpreter_filter *f)
 {
 	std::vector<uint8_t> chunk;
-	chunk.reserve(CHUNK_BYTES);
 	while (f->running.load()) {
 		std::unique_lock<std::mutex> lk(f->buf_mtx);
-		f->buf_cv.wait(lk, [f] { return !f->running.load() || f->pcm_buf.size() >= CHUNK_BYTES; });
-		while (f->pcm_buf.size() >= CHUNK_BYTES) {
-			chunk.assign(f->pcm_buf.begin(), f->pcm_buf.begin() + CHUNK_BYTES);
-			f->pcm_buf.erase(f->pcm_buf.begin(), f->pcm_buf.begin() + CHUNK_BYTES);
+		f->buf_cv.wait(lk, [f] { return !f->running.load() || f->pcm_buf.size() >= f->chunk_bytes.load(); });
+		size_t cb = f->chunk_bytes.load();
+		while (f->pcm_buf.size() >= cb) {
+			chunk.assign(f->pcm_buf.begin(), f->pcm_buf.begin() + cb);
+			f->pcm_buf.erase(f->pcm_buf.begin(), f->pcm_buf.begin() + cb);
 			lk.unlock();
 			if (f->enabled.load() && f->ws_ready.load())
 				f->ws.sendBinary(std::string(reinterpret_cast<const char *>(chunk.data()), chunk.size()));
 			lk.lock();
+			cb = f->chunk_bytes.load();
 		}
 	}
 }
@@ -139,16 +145,40 @@ static void interpreter_filter_update(void *data, obs_data_t *settings)
 	auto *f = static_cast<interpreter_filter *>(data);
 	f->server_url = obs_data_get_string(settings, "server_url");
 	f->service_key = obs_data_get_string(settings, "service_key");
+	std::string engine = obs_data_get_string(settings, "engine");
+	if (engine != "openai")
+		engine = "gemini"; /* 화이트리스트(기본 gemini) */
 	bool want = obs_data_get_bool(settings, "enabled");
 
-	std::string url = f->server_url + "/ingress?key=" + f->service_key;
+	/* 엔진별 입력 레이트: Gemini 16k / OpenAI 24k. 100ms 청크 = rate/5 바이트(s16 mono). */
+	uint32_t new_rate = (engine == "openai") ? 24000u : 16000u;
+	if (new_rate != f->up_rate.load()) {
+		f->up_rate = new_rate;
+		f->chunk_bytes = new_rate / 5;
+		/* 레이트 변경 → 리샘플러 재생성(콜백이 새 레이트로 lazy 생성) + 이전 레이트 잔여 폐기 */
+		{
+			std::lock_guard<std::mutex> rlk(f->resampler_mtx);
+			if (f->resampler) {
+				audio_resampler_destroy(f->resampler);
+				f->resampler = nullptr;
+			}
+		}
+		{
+			std::lock_guard<std::mutex> blk(f->buf_mtx);
+			f->pcm_buf.clear();
+		}
+	}
+	f->engine = engine;
+
+	std::string url = f->server_url + "/ingress?key=" + f->service_key + "&engine=" + engine;
 	f->ws.setUrl(url);
 	f->ws.stop();
 	f->ws_ready = false;
 	f->enabled = want;
 	if (want) {
 		f->ws.start(); /* 자동 재접속 포함 */
-		obs_log(LOG_INFO, "[interpreter] 업링크 ON → %s/ingress", f->server_url.c_str());
+		obs_log(LOG_INFO, "[interpreter] 업링크 ON → %s/ingress (engine=%s, %uHz)", f->server_url.c_str(),
+			engine.c_str(), new_rate);
 	} else {
 		obs_log(LOG_INFO, "[interpreter] 업링크 OFF");
 	}
@@ -219,6 +249,7 @@ static void interpreter_filter_destroy(void *data)
 static void interpreter_filter_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, "server_url", "ws://localhost:8000");
+	obs_data_set_default_string(settings, "engine", "gemini");
 	obs_data_set_default_bool(settings, "enabled", false);
 }
 
@@ -228,6 +259,10 @@ static obs_properties_t *interpreter_filter_properties(void *data)
 	obs_properties_t *p = obs_properties_create();
 	obs_properties_add_text(p, "server_url", obs_module_text("ServerUrl"), OBS_TEXT_DEFAULT);
 	obs_properties_add_text(p, "service_key", obs_module_text("ServiceKey"), OBS_TEXT_PASSWORD);
+	obs_property_t *eng = obs_properties_add_list(p, "engine", obs_module_text("Engine"), OBS_COMBO_TYPE_LIST,
+						     OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(eng, obs_module_text("EngineGemini"), "gemini");
+	obs_property_list_add_string(eng, obs_module_text("EngineOpenAI"), "openai");
 	obs_properties_add_bool(p, "enabled", obs_module_text("Enabled"));
 	return p;
 }
@@ -244,11 +279,12 @@ static struct obs_audio_data *interpreter_filter_audio(void *data, struct obs_au
 		if (!f->resampler) {
 			struct obs_audio_info oai;
 			if (obs_get_audio_info(&oai)) {
+				uint32_t rate = f->up_rate.load();
 				struct resample_info src = {oai.samples_per_sec, AUDIO_FORMAT_FLOAT_PLANAR,
 							    oai.speakers};
-				struct resample_info dst = {UP_RATE, AUDIO_FORMAT_16BIT, SPEAKERS_MONO};
+				struct resample_info dst = {rate, AUDIO_FORMAT_16BIT, SPEAKERS_MONO};
 				f->resampler = audio_resampler_create(&dst, &src);
-				obs_log(LOG_INFO, "[interpreter] 리샘플러 생성 %u→%u Hz", oai.samples_per_sec, UP_RATE);
+				obs_log(LOG_INFO, "[interpreter] 리샘플러 생성 %u→%u Hz", oai.samples_per_sec, rate);
 			}
 		}
 		if (f->resampler) {
@@ -261,7 +297,7 @@ static struct obs_audio_data *interpreter_filter_audio(void *data, struct obs_au
 				if (bytes && out[0]) {
 					std::lock_guard<std::mutex> blk(f->buf_mtx);
 					f->pcm_buf.insert(f->pcm_buf.end(), out[0], out[0] + bytes);
-					if (f->pcm_buf.size() >= CHUNK_BYTES)
+					if (f->pcm_buf.size() >= f->chunk_bytes.load())
 						f->buf_cv.notify_one();
 				}
 			}

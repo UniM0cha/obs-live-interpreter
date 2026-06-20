@@ -15,7 +15,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-load_dotenv()
+load_dotenv()  # .env (공유 기본값)
+# .env.local: 머신별 실제 키(gitignore). .env 값을 오버라이드.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local"), override=True)
 from session_manager import SessionManager  # noqa: E402  (load_dotenv 먼저)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -46,7 +48,12 @@ mgr = SessionManager(broadcast_audio, on_transcript=log_transcript)
 
 
 def status_payload() -> str:
-    return json.dumps({"type": "status", "live": mgr.live, "langs": mgr.active_langs()})
+    return json.dumps({
+        "type": "status",
+        "live": mgr.live,
+        "engine": mgr.engine,
+        "langs": mgr.active_langs(),
+    })
 
 
 async def broadcast_status():
@@ -65,9 +72,10 @@ async def ingress(ws: WebSocket):
         await ws.close(code=4401)
         log.warning("ingress 인증 실패")
         return
+    engine = ws.query_params.get("engine", "gemini")
     await ws.accept()
-    log.info("ingress 연결됨 → 서비스 LIVE")
-    await mgr.set_live(True)
+    log.info("ingress 연결됨 → 서비스 LIVE (engine=%s)", engine)
+    await mgr.set_live(True, engine=engine)
     await broadcast_status()
     try:
         while True:
