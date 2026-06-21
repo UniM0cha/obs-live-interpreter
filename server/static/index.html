@@ -10,6 +10,7 @@
   body { margin: 0; font-family: -apple-system, system-ui, sans-serif;
          background: #0f1115; color: #e8eaed;
          height: 100vh; height: 100dvh; /* dvh: 모바일 주소창 영역 제외(스크롤바 방지), vh는 폴백 */
+         overflow: hidden; /* 페이지 100dvh 고정 — 자막 영역만 스크롤 */
          display: flex; flex-direction: column; align-items: center; }
   header { padding: 24px 16px 8px; text-align: center; }
   h1 { font-size: 18px; font-weight: 600; margin: 0; }
@@ -27,14 +28,11 @@
   .big.stop { background: #ef4444; color: #fff; }
   .big:disabled { opacity: .4; }
   .hint { font-size: 12px; color: #6b7280; text-align: center; line-height: 1.5; }
-  /* 흐르는 자막 — 위→아래로 쌓이고 자동 스크롤로 음성 위치를 따라감 */
+  /* 흐르는 자막 — 같은 스타일로 위→아래 쌓이고, 자막 영역만 스크롤(채팅식 바닥 추종) */
   .caption { flex: 1; min-height: 120px; margin-top: 8px; padding: 14px 16px;
          border-radius: 12px; background: #11141a; border: 1px solid #2a2e37;
-         overflow-y: auto; font-size: 19px; line-height: 1.6;
+         overflow-y: auto; font-size: 19px; line-height: 1.65; color: #f1f3f4;
          white-space: pre-wrap; word-break: break-word; }
-  /* 모든 글자 동일 크기 — 음성으로 나온(들린) 부분만 굵게/밝게, 곧 나올 부분은 연하게 */
-  .caption .heard { color: #f1f3f4; font-weight: 700; }
-  .caption .ahead { color: #9aa0a6; font-weight: 400; }
   .caption.empty::before { content: "자막이 여기에 표시됩니다 / Subtitles appear here";
          color: #4b5563; font-size: 14px; }
 </style>
@@ -69,10 +67,8 @@ const statusEl = document.getElementById("status");
 const toggleEl = document.getElementById("toggle");
 const langsEl = document.getElementById("langs");
 const captionEl = document.getElementById("caption");
-let segments = [];     // {el, playAt} — 자막 조각마다 그 음성이 재생될 대략 시각 기록
-let boldIndex = 0;     // segments[< boldIndex] 는 이미 음성으로 나온(heard) 부분
-let rafId = null;
-const MAX_SEG = 600;   // 누적 상한(sliding window) — 오래된 건 제거해 모바일 렉 방지
+let stick = true;      // 맨 아래 고정 여부(위로 스크롤하면 false → 자동 스크롤 정지)
+const MAX_NODES = 800; // 누적 상한 — 오래된 자막 제거(모바일 렉 방지)
 
 function renderLangs() {
   langsEl.innerHTML = "";
@@ -95,55 +91,27 @@ function setStatus(text, isLive) {
 }
 
 function clearCaption() {
-  segments = [];
-  boldIndex = 0;
-  captionEl.innerHTML = "";
+  captionEl.textContent = "";
   captionEl.classList.add("empty");
+  stick = true;
 }
 
 function addCaption(delta) {
   if (!delta) return;
-  const span = document.createElement("span");
-  span.className = "ahead";
-  span.textContent = delta;
-  captionEl.appendChild(span);
+  captionEl.appendChild(document.createTextNode(delta)); // 같은 스타일로 흐르며 append
   captionEl.classList.remove("empty");
-  // 이 자막의 음성이 재생될 대략 시각 = 현재 스케줄된 오디오 끝(playHead)
-  const playAt = audioCtx ? (playHead || audioCtx.currentTime) : 0;
-  segments.push({ el: span, playAt });
-  // sliding window: 오래된 조각 앞에서 제거(스크롤로 사라진 부분)
-  while (segments.length > MAX_SEG) {
-    const old = segments.shift();
-    if (old.el.parentNode) old.el.parentNode.removeChild(old.el);
-    if (boldIndex > 0) boldIndex--;
+  if (stick) {
+    // 바닥 고정 중일 때만: 오래된 자막 트림 + 맨 아래로 스크롤 (위로 읽는 중엔 안 건드림)
+    while (captionEl.childNodes.length > MAX_NODES) captionEl.removeChild(captionEl.firstChild);
+    captionEl.scrollTop = captionEl.scrollHeight;
   }
 }
-
-function captionTick() {
-  if (audioCtx && segments.length) {
-    const now = audioCtx.currentTime;
-    // 음성이 지나간 조각을 굵게(heard)로 — 크기는 그대로, 굵기·색만 변함
-    while (boldIndex < segments.length && segments[boldIndex].playAt <= now) {
-      segments[boldIndex].el.className = "heard";
-      boldIndex++;
-    }
-    // 음성 위치(굵은 경계)를 화면 ~55% 에 두도록 부드럽게(lerp) 자동 스크롤
-    const edge = segments[Math.min(boldIndex, segments.length - 1)].el;
-    const target = Math.max(0, edge.offsetTop - captionEl.clientHeight * 0.55);
-    captionEl.scrollTop += (target - captionEl.scrollTop) * 0.15;
-  }
-  rafId = requestAnimationFrame(captionTick);
-}
-
-function startCaptionLoop() { if (!rafId) rafId = requestAnimationFrame(captionTick); }
-function stopCaptionLoop() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
 
 function start() {
   clearCaption();
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   audioCtx.resume();
   playHead = audioCtx.currentTime + 0.15;
-  startCaptionLoop();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/listen?lang=${selected}`);
   ws.binaryType = "arraybuffer";
@@ -166,7 +134,6 @@ function start() {
 
 function stop() {
   listening = false;
-  stopCaptionLoop();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   toggleEl.textContent = "듣기 시작";
   toggleEl.classList.remove("stop");
@@ -192,6 +159,11 @@ function playChunk(int16) {
   src.start(playHead);
   playHead += buf.duration;
 }
+
+// 사용자가 위로 스크롤하면 자동 스크롤 정지, 바닥 근처(<24px)로 오면 재개
+captionEl.addEventListener("scroll", () => {
+  stick = captionEl.scrollHeight - captionEl.scrollTop - captionEl.clientHeight < 24;
+});
 
 toggleEl.onclick = () => { listening ? stop() : start(); };
 renderLangs();
