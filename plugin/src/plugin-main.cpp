@@ -86,10 +86,10 @@ void obs_module_post_load(void)
 {
 	/* 프론트엔드 준비 후 도크 등록 (보기→도크 메뉴에 노출) */
 	g_dock = new InterpreterDock();
-	obs_frontend_add_dock_by_id("obs_live_interpreter_dock", obs_module_text("DockTitle"), g_dock);
+	obs_frontend_add_dock_by_id("glossa_dock", obs_module_text("DockTitle"), g_dock);
 
 	/* 전역 핫키 — 소스별이 아니라 통역 엔진 전체 토글 */
-	g_toggle_hotkey = obs_hotkey_register_frontend("obs_live_interpreter.toggle", obs_module_text("ToggleHotkey"),
+	g_toggle_hotkey = obs_hotkey_register_frontend("glossa.toggle", obs_module_text("ToggleHotkey"),
 						       toggle_hotkey, nullptr);
 
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
