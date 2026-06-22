@@ -1,7 +1,7 @@
 # 클라우드 동반 서버 (Python)
 
 OBS 플러그인이 올린 한국어 16k PCM을 받아, **구독자 있는 언어만** Gemini Live Translate 세션을
-돌려 번역 음성을 폰으로 스트리밍한다. (전체 설계: 상위 [README.md](../README.md), 플랜은 승인된 플랜 파일)
+돌려 번역 음성을 폰으로 스트리밍한다. (전체 설계: 상위 [README.md](../README.md))
 
 ## 구성
 - `app.py` — FastAPI. `/ingress`(플러그인 WS, 서비스 키 인증) · `/listen?lang=`(폰 WS) · `/`(웹클라이언트)
