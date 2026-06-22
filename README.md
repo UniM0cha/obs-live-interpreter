@@ -1,9 +1,5 @@
 # Glossa (교회 실시간 설교 통역)
 
-> **상태**: Phase 0(프로토타입)~Phase 2(다국어 서버)까지 구현되어 있습니다.
-> [GitHub Releases](https://github.com/UniM0cha/glossa/releases) 에서
-> macOS(Apple Silicon)·Windows(x64) 설치 파일을 받아 OBS 에 설치할 수 있습니다. (아래 **설치하기** 참고)
-
 한국어 설교를 **실시간으로 외국어 음성으로 통역**하여, 외국인 성도가 무선 이어폰으로
 자신의 언어로 들을 수 있게 하는 OBS Studio 플러그인 프로젝트입니다.
 
