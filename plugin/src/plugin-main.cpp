@@ -1,5 +1,5 @@
 /*
-OBS Live Interpreter — 모듈 진입점.
+Glossa — 모듈 진입점.
 
 통역 입력은 더 이상 소스별 "필터"가 아니다. 통역 도크에서 체크한 오디오 소스들을
 InterpreterEngine 이 audio_capture_callback 으로 받아 하나로 믹싱 → 단일 WS 로 서버에 보낸다.
@@ -78,7 +78,7 @@ bool obs_module_load(void)
 {
 	ix::initNetSystem();
 	InterpreterEngine::instance(); /* 싱글톤 생성(믹스/WS 워커 시작) */
-	obs_log(LOG_INFO, "OBS Live Interpreter 로드됨 (버전 %s)", PLUGIN_VERSION);
+	obs_log(LOG_INFO, "Glossa 로드됨 (버전 %s)", PLUGIN_VERSION);
 	return true;
 }
 
@@ -117,5 +117,5 @@ void obs_module_unload(void)
 		obs_hotkey_unregister(g_toggle_hotkey);
 	InterpreterEngine::instance().shutdown();
 	ix::uninitNetSystem();
-	obs_log(LOG_INFO, "OBS Live Interpreter 언로드됨");
+	obs_log(LOG_INFO, "Glossa 언로드됨");
 }

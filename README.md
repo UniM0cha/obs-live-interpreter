@@ -1,19 +1,20 @@
-# OBS Live Interpreter (교회 실시간 설교 통역)
+# Glossa (교회 실시간 설교 통역)
 
 > **상태**: Phase 0(프로토타입)~Phase 2(다국어 서버)까지 구현되어 있습니다.
-> [GitHub Releases](https://github.com/UniM0cha/obs-live-interpreter/releases) 에서
+> [GitHub Releases](https://github.com/UniM0cha/glossa/releases) 에서
 > macOS(Apple Silicon)·Windows(x64) 설치 파일을 받아 OBS 에 설치할 수 있습니다. (아래 **설치하기** 참고)
 
 한국어 설교를 **실시간으로 외국어 음성으로 통역**하여, 외국인 성도가 무선 이어폰으로
 자신의 언어로 들을 수 있게 하는 OBS Studio 플러그인 프로젝트입니다.
 
-> 프로젝트 이름은 임시입니다. 원하시면 `church-live-translation` 등으로 바꿔도 됩니다.
+> *Glossa*(γλῶσσα)는 "혀·방언·언어"를 뜻하는 헬라어로, 오순절(사도행전 2장)에 나오는 단어입니다.
+> *"우리가 다 우리의 각 언어(Glossa)로 하나님의 큰 일을 말함을 듣는도다"* — 사도행전 2:11
 
 ---
 
 ## 설치하기 (다른 PC 의 OBS 에 설치)
 
-플러그인 바이너리는 [GitHub Releases](https://github.com/UniM0cha/obs-live-interpreter/releases) 에서 받습니다.
+플러그인 바이너리는 [GitHub Releases](https://github.com/UniM0cha/glossa/releases) 에서 받습니다.
 컴파일된 네이티브 플러그인이라 **플랫폼별 빌드가 다릅니다** (macOS 번들과 Windows DLL 은 서로 호환되지 않음).
 자신의 OS 에 맞는 파일을 받으세요.
 
@@ -33,7 +34,7 @@
 서버를 직접 띄운 뒤(저장소의 `server/` 를 Railway 등에 배포 — 가이드는 [`server/README.md`](server/README.md))
 OBS 에서 직접 입력하세요:
 
-1. OBS 메뉴 **보기 → 도크 → 통역 Interpreter** 로 통역 도크를 엽니다.
+1. OBS 메뉴 **보기 → 도크 → Glossa** 로 통역 도크를 엽니다.
 2. 도크에서 설정:
    - **Server URL**: 본인 서버의 `wss://<호스트>` (로컬 테스트면 `ws://localhost:8000`)
    - **Service Key**: 서버의 `SERVICE_KEY` 와 동일하게
@@ -48,11 +49,11 @@ OBS 에서 직접 입력하세요:
 
 - **macOS**: `.pkg` 는 언인스톨러를 만들지 않으니 플러그인 번들을 직접 지웁니다 (번들 하나뿐이라 단순):
   ```bash
-  rm -rf ~/Library/Application\ Support/obs-studio/plugins/obs-live-interpreter.plugin
-  pkgutil --forget com.unim0cha.obs-live-interpreter   # (선택) 설치 기록 정리
+  rm -rf ~/Library/Application\ Support/obs-studio/plugins/glossa.plugin
+  pkgutil --forget com.unim0cha.glossa   # (선택) 설치 기록 정리
   ```
-  Finder 라면 `~/Library/Application Support/obs-studio/plugins/` 에서 `obs-live-interpreter.plugin` 을 휴지통으로. 이후 OBS 재시작.
-- **Windows**: **설정 > 앱 > obs-live-interpreter > 제거** (Inno Setup 이 만든 언인스톨러). 또는 설치 폴더의 `unins000.exe` 실행.
+  Finder 라면 `~/Library/Application Support/obs-studio/plugins/` 에서 `glossa.plugin` 을 휴지통으로. 이후 OBS 재시작.
+- **Windows**: **설정 > 앱 > glossa > 제거** (Inno Setup 이 만든 언인스톨러). 또는 설치 폴더의 `unins000.exe` 실행.
 
 > 아키텍처별 차이나 직접 빌드(다른 Mac/Windows)에 대한 배경은 `CLAUDE.md` 와 아래 로드맵을 참고하세요.
 
@@ -199,7 +200,7 @@ git push origin v0.1.0
 ## 6. 디렉토리 구조
 
 ```
-obs-live-interpreter/
+glossa/
 ├── README.md          # 이 문서
 ├── CLAUDE.md          # Claude Code 작업 지침 / 검증 규칙
 ├── .gitignore

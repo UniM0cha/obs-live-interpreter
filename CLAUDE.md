@@ -1,4 +1,4 @@
-# CLAUDE.md — OBS Live Interpreter
+# CLAUDE.md — Glossa
 
 이 저장소에서 작업할 때 따르는 지침입니다. 전역 `~/CLAUDE.md` 규칙도 함께 적용됩니다.
 

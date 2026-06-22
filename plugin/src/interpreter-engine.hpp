@@ -1,5 +1,5 @@
 /*
-OBS Live Interpreter — 통역 엔진 (싱글톤).
+Glossa — 통역 엔진 (싱글톤).
 
 도크에서 체크한 오디오 소스들의 audio_capture_callback 을 받아 타임스탬프 정렬로 모노 믹싱 →
 엔진 레이트(16k/24k)로 리샘플 → 단일 WebSocket 으로 서버 /ingress 에 업로드한다.

@@ -1,5 +1,5 @@
 /*
-OBS Live Interpreter — 통역 엔진 구현. 설계는 interpreter-engine.hpp 참고.
+Glossa — 통역 엔진 구현. 설계는 interpreter-engine.hpp 참고.
 */
 #include "interpreter-engine.hpp"
 #include "interpreter-control.hpp"

@@ -1,4 +1,4 @@
-; Inno Setup 스크립트 — OBS Live Interpreter (Windows x64, per-user 설치)
+; Inno Setup 스크립트 — Glossa (Windows x64, per-user 설치)
 ;
 ; 값(이름/버전/소스경로/출력)은 빌드 시 ISCC 의 /D 정의로 주입된다.
 ;   → plugin/.github/scripts/Package-Windows.ps1 참고
@@ -6,13 +6,13 @@
 ; 현재 사용자의 OBS 플러그인 폴더에 설치한다.
 
 #ifndef MyAppName
-  #define MyAppName "obs-live-interpreter"
+  #define MyAppName "glossa"
 #endif
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
 #ifndef MyAppPublisher
-  #define MyAppPublisher "OBS Live Interpreter"
+  #define MyAppPublisher "Glossa"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "."
@@ -21,7 +21,7 @@
   #define MyOutputDir "."
 #endif
 #ifndef MyOutputBase
-  #define MyOutputBase "obs-live-interpreter-installer"
+  #define MyOutputBase "glossa-installer"
 #endif
 
 [Setup]

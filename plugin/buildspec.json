@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.unim0cha.obs-live-interpreter"
+            "bundleId": "com.unim0cha.glossa"
         }
     },
-    "name": "obs-live-interpreter",
-    "displayName": "OBS Live Interpreter",
+    "name": "glossa",
+    "displayName": "Glossa",
     "version": "0.1.0",
     "author": "Jeongyun Lee",
-    "website": "https://github.com/UniM0cha/obs-live-interpreter",
+    "website": "https://github.com/UniM0cha/glossa",
     "email": "cwjuni9924@gmail.com"
 }

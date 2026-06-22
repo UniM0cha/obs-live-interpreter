@@ -1,4 +1,4 @@
-"""OBS Live Interpreter — 클라우드 동반 서버.
+"""Glossa — 클라우드 동반 서버.
 
 - /ingress (WS): OBS 플러그인이 서비스 키로 접속해 16k 한국어 PCM 업로드. 접속=서비스 LIVE.
 - /listen  (WS): 폰이 ?lang=xx 로 접속, 상태(JSON text) + 번역 음성(24k PCM binary) 수신.
@@ -49,7 +49,7 @@ async def lifespan(_app):
         task.cancel()
 
 
-app = FastAPI(title="OBS Live Interpreter", lifespan=lifespan)
+app = FastAPI(title="Glossa", lifespan=lifespan)
 
 # lang -> set[WebSocket] (폰 구독자) / ingress 연결들 / LIVE 시작 시각(epoch)
 listeners: dict[str, set] = {}
