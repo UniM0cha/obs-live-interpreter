@@ -10,6 +10,8 @@ Glossa — 통역 엔진 (싱글톤).
 */
 #pragma once
 
+#include "interpreter-control.hpp" /* interpreter_conn_error_t (멤버 기본값에 사용) */
+
 #include <obs.h>
 #include <media-io/audio-resampler.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -59,8 +61,10 @@ public:
 	/* 모니터링 (도크 폴링) */
 	ServerStatus status();
 
-	/* 마지막 연결 실패 사유 (사람이 읽을 한국어 메시지). 연결 성공/정상이면 빈 문자열. */
-	std::string connection_error();
+	/* 마지막 연결 실패 사유 — "종류"만 노출(interpreter_conn_error_t). 문자열화는 도크가 로케일로.
+	 * 연결 성공/정상이면 CONN_ERR_NONE. CONN_ERR_HTTP 일 때 HTTP 코드는 connection_error_http(). */
+	int connection_error_kind();
+	int connection_error_http();
 
 	/* 영속성 (obs_module_config_path) */
 	void load_config();
@@ -90,7 +94,7 @@ private:
 	void ws_worker_fn();               /* upload_buf → ws.sendBinary (100ms 청크) */
 	void on_ws_message(const ix::WebSocketMessagePtr &msg);
 	void parse_status(const std::string &text);
-	void set_conn_error(const std::string &msg); /* 연결 실패 사유 저장 (락 보유) */
+	void set_conn_error(int kind, int http = 0); /* 연결 실패 사유 저장 (락 보유) */
 	void clear_conn_error();                      /* 새 연결 시도 직전 초기화 */
 
 	/* --- 설정 --- */
@@ -134,7 +138,8 @@ private:
 	std::mutex status_mtx_;
 	ServerStatus status_;
 
-	/* --- 마지막 연결 실패 사유 (Error/Close 이벤트 → 도크 노출) --- */
+	/* --- 마지막 연결 실패 사유 종류 (Error/Close 이벤트 → 도크가 로케일로 문자열화) --- */
 	std::mutex conn_mtx_;
-	std::string conn_error_;
+	int conn_err_kind_{CONN_ERR_NONE};
+	int conn_err_http_{0}; /* CONN_ERR_HTTP 일 때의 HTTP 상태코드 */
 };

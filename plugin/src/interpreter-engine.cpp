@@ -373,7 +373,7 @@ void InterpreterEngine::on_ws_message(const ix::WebSocketMessagePtr &msg)
 		uint16_t code = msg->closeInfo.code;
 		/* 정상 종료(stop()/1000/1001)는 에러로 취급하지 않음. 인증 거부 코드(4401)만 사유 저장. */
 		if (code == 4401)
-			set_conn_error("서비스 키가 올바르지 않습니다 — 키를 확인하세요");
+			set_conn_error(CONN_ERR_AUTH);
 		obs_log(LOG_INFO, "[interpreter] 서버 연결 끊김 (code=%u %s)", code,
 			msg->closeInfo.reason.c_str());
 		break;
@@ -382,14 +382,12 @@ void InterpreterEngine::on_ws_message(const ix::WebSocketMessagePtr &msg)
 		ws_ready_ = false;
 		int st = msg->errorInfo.http_status;
 		const std::string &reason = msg->errorInfo.reason;
-		std::string m;
 		if (st == 401 || st == 403 || st == 4401)
-			m = "서비스 키가 올바르지 않습니다 — 키를 확인하세요";
+			set_conn_error(CONN_ERR_AUTH);
 		else if (st > 0)
-			m = "서버 오류 (HTTP " + std::to_string(st) + ")";
+			set_conn_error(CONN_ERR_HTTP, st);
 		else
-			m = "서버에 연결할 수 없습니다 — 주소·네트워크를 확인하거나 서버 실행 여부를 점검하세요";
-		set_conn_error(m);
+			set_conn_error(CONN_ERR_NETWORK);
 		obs_log(LOG_WARNING, "[interpreter] WS 오류: status=%d reason=%s", st, reason.c_str());
 		break;
 	}
@@ -402,22 +400,30 @@ void InterpreterEngine::on_ws_message(const ix::WebSocketMessagePtr &msg)
 	}
 }
 
-void InterpreterEngine::set_conn_error(const std::string &msg)
+void InterpreterEngine::set_conn_error(int kind, int http)
 {
 	std::lock_guard<std::mutex> lk(conn_mtx_);
-	conn_error_ = msg;
+	conn_err_kind_ = kind;
+	conn_err_http_ = http;
 }
 
 void InterpreterEngine::clear_conn_error()
 {
 	std::lock_guard<std::mutex> lk(conn_mtx_);
-	conn_error_.clear();
+	conn_err_kind_ = CONN_ERR_NONE;
+	conn_err_http_ = 0;
 }
 
-std::string InterpreterEngine::connection_error()
+int InterpreterEngine::connection_error_kind()
 {
 	std::lock_guard<std::mutex> lk(conn_mtx_);
-	return conn_error_;
+	return conn_err_kind_;
+}
+
+int InterpreterEngine::connection_error_http()
+{
+	std::lock_guard<std::mutex> lk(conn_mtx_);
+	return conn_err_http_;
 }
 
 void InterpreterEngine::parse_status(const std::string &text)
@@ -495,7 +501,7 @@ int InterpreterEngine::state()
 		return INTERP_LIVE;
 	{
 		std::lock_guard<std::mutex> lk(conn_mtx_);
-		if (!conn_error_.empty())
+		if (conn_err_kind_ != CONN_ERR_NONE)
 			return INTERP_ERROR; /* 연결 실패 사유 있음 → 시도 중과 구분 */
 	}
 	return INTERP_CONNECTING;

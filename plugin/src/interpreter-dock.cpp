@@ -3,6 +3,7 @@
 #include "interpreter-engine.hpp"
 
 #include <obs.h>
+#include <obs-module.h> /* obs_module_text — 로케일 문자열 조회 */
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -23,6 +24,12 @@
 #include <ixwebsocket/IXHttpClient.h>
 #include <nlohmann/json.hpp>
 
+/* 로케일 문자열 조회 헬퍼 — obs_module_text(키) → QString. en-US/ko-KR.ini 가 동일 키셋 보유. */
+static inline QString T(const char *key)
+{
+	return QString::fromUtf8(obs_module_text(key));
+}
+
 /* obs_enum_sources 콜백 — 오디오 출력 플래그가 있는 소스 이름만 수집 */
 static bool enum_audio_sources(void *p, obs_source_t *s)
 {
@@ -41,23 +48,23 @@ InterpreterDock::InterpreterDock(QWidget *parent) : QWidget(parent)
 	layout->setContentsMargins(12, 12, 12, 12);
 	layout->setSpacing(8);
 
-	auto *lblServer = new QLabel("서버 주소 (청취 페이지 URL)", this);
+	auto *lblServer = new QLabel(T("LabelServerUrl"), this);
 	serverEdit = new QLineEdit(this);
 	serverEdit->setPlaceholderText("https://your-host.example.com");
-	auto *lblKey = new QLabel("서비스 키 (Service Key)", this);
+	auto *lblKey = new QLabel(T("LabelServiceKey"), this);
 	keyEdit = new QLineEdit(this);
 	keyEdit->setEchoMode(QLineEdit::Password);
-	auto *lblEngine = new QLabel("번역 엔진 (Engine)", this);
+	auto *lblEngine = new QLabel(T("LabelEngine"), this);
 	engineBox = new QComboBox(this);
-	engineBox->addItem("Gemini (16kHz)", "gemini");
-	engineBox->addItem("OpenAI (24kHz)", "openai");
+	engineBox->addItem(T("EngineGemini"), "gemini");
+	engineBox->addItem(T("EngineOpenAI"), "openai");
 
-	auto *lblVoice = new QLabel("설교자 음색 (Voice)", this);
-	voiceBox = new QCheckBox("설교자 본인 목소리로 변환", this);
+	auto *lblVoice = new QLabel(T("LabelVoice"), this);
+	voiceBox = new QCheckBox(T("VoiceConvert"), this);
 	speakerBox = new QComboBox(this);
 	speakerBox->setEnabled(false); /* 서버에서 목록 받기 전엔 비활성 — fetchSpeakers 가 채운다 */
 
-	auto *lblSrc = new QLabel("통역할 오디오 — 체크하면 합성되어 번역됩니다", this);
+	auto *lblSrc = new QLabel(T("LabelSources"), this);
 	lblSrc->setWordWrap(true);
 	sourceList = new QListWidget(this);
 	sourceList->setMaximumHeight(150);
@@ -184,36 +191,52 @@ void InterpreterDock::refresh()
 	status->setStyleSheet(""); /* 매 갱신마다 리셋 — ERROR 빨강이 다른 상태로 남지 않게 */
 	switch (eng.state()) {
 	case INTERP_NONE:
-		status->setText("통역할 오디오 소스를\n위에서 체크하세요");
-		button->setText("통역 시작");
+		status->setText(T("StatusNoSource"));
+		button->setText(T("BtnStart"));
 		button->setEnabled(false);
 		button->setStyleSheet("");
 		break;
 	case INTERP_OFF:
-		status->setText("⏸  대기 중 (OFF)");
-		button->setText("통역 시작");
+		status->setText(T("StatusStandby"));
+		button->setText(T("BtnStart"));
 		button->setEnabled(true);
 		button->setStyleSheet("background:#2563eb; color:white; font-weight:bold; font-size:15px;");
 		break;
 	case INTERP_CONNECTING:
-		status->setText("●  서버 연결 중…");
-		button->setText("통역 중지");
+		status->setText(T("StatusConnecting"));
+		button->setText(T("BtnStop"));
 		button->setEnabled(true);
 		button->setStyleSheet("background:#d97706; color:white; font-weight:bold; font-size:15px;");
 		break;
 	case INTERP_LIVE:
-		status->setText("🔴  통역 중 (LIVE)");
-		button->setText("통역 중지");
+		status->setText(T("StatusLive"));
+		button->setText(T("BtnStop"));
 		button->setEnabled(true);
 		button->setStyleSheet("background:#dc2626; color:white; font-weight:bold; font-size:15px;");
 		break;
-	case INTERP_ERROR:
+	case INTERP_ERROR: {
+		QString reason;
+		switch (eng.connection_error_kind()) {
+		case CONN_ERR_AUTH:
+			reason = T("ErrAuth");
+			break;
+		case CONN_ERR_NETWORK:
+			reason = T("ErrNetwork");
+			break;
+		case CONN_ERR_HTTP:
+			reason = T("ErrHttp").arg(eng.connection_error_http());
+			break;
+		default:
+			reason = T("ErrAuth");
+			break;
+		}
 		status->setStyleSheet("color:#dc2626; font-weight:bold;");
-		status->setText("⚠  연결 실패\n" + QString::fromStdString(eng.connection_error()));
-		button->setText("통역 중지");
+		status->setText(T("StatusError").arg(reason));
+		button->setText(T("BtnStop"));
 		button->setEnabled(true);
 		button->setStyleSheet("background:#dc2626; color:white; font-weight:bold; font-size:15px;");
 		break;
+	}
 	}
 
 	/* 모니터링 패널 */
@@ -224,12 +247,11 @@ void InterpreterDock::refresh()
 		QStringList parts;
 		for (const auto &kv : st.listeners)
 			parts << QString("%1 %2").arg(QString::fromStdString(kv.first)).arg(kv.second);
-		QString br = parts.isEmpty() ? QString("청취자 없음") : ("청취자 " + QString::number(st.total) +
-									 "명 (" + parts.join(" · ") + ")");
-		monitor->setText(QString("⏱ %1   |   %2   |   엔진: %3")
-					 .arg(dur, br, QString::fromStdString(st.engine)));
+		QString br = parts.isEmpty() ? T("MonNoListeners")
+					     : T("MonListeners").arg(st.total).arg(parts.join(" · "));
+		monitor->setText(T("MonSummary").arg(dur, br, QString::fromStdString(st.engine)));
 	} else {
-		monitor->setText("— 서버 대기 중 —");
+		monitor->setText(T("MonWaiting"));
 	}
 }
 
@@ -291,9 +313,9 @@ void InterpreterDock::populateSpeakers(const std::vector<std::pair<std::string, 
 		int idx = speakerBox->findData(QString::fromStdString(prev));
 		speakerBox->setCurrentIndex(idx >= 0 ? idx : 0);
 	} else {
-		const char *msg = eng.server_url().empty() ? "서버 주소를 먼저 입력하세요"
-				  : ok                       ? "등록된 설교자가 없습니다"
-							     : "설교자 목록을 불러오지 못했습니다";
+		QString msg = eng.server_url().empty() ? T("SpeakerNeedUrl")
+			      : ok                       ? T("SpeakerNone")
+							 : T("SpeakerFetchFail");
 		speakerBox->addItem(msg); /* data 없음 → 선택해도 speaker 미설정 */
 		voiceBox->setChecked(false);
 	}
