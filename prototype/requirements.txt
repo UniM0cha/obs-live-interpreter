@@ -1,9 +1,0 @@
-# 마일스톤 A (파일 기반 API 검증) — 필수
-google-genai>=1.0.0        # TranslationConfig 없으면: pip install -U google-genai
-python-dotenv>=1.0.0       # .env 에서 GEMINI_API_KEY 로드
-
-# 마일스톤 B (실시간 마이크→스피커) — 필수
-sounddevice>=0.5.0         # PortAudio 포함 휠. Raw 스트림 사용이라 numpy 불필요
-
-# 마일스톤 C 에서 필요시 추가
-# soundfile>=0.12          # WAV I/O 보조

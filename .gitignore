@@ -23,22 +23,12 @@ __pycache__/
 venv/
 .python-version
 
-# 프로토타입 생성/출력 오디오 (커밋 금지)
-prototype/samples/
-prototype/out*.wav
+# 프로토타입 — git 미포함 (로컬 파이프라인 검증용; 설교자 실명 등이 들어가므로 추적 안 함)
+prototype/
+
+# 출력 오디오 (커밋 금지)
 server/out*.wav
 *.aiff
-
-# voice cloning 음원·모델·생성물 (큰 파일, 커밋 금지; voices.json·*.py 는 추적)
-prototype/voices/raw/
-prototype/voices/wav16/
-prototype/voices/models/
-prototype/voices/segments/
-prototype/voices/transcripts/
-prototype/voices/ab*/
-prototype/voices/*.wav
-prototype/voices/*.tsv
-prototype/voices/*.err
 
 # OS / 에디터
 .DS_Store

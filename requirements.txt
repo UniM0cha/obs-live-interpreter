@@ -1,6 +1,3 @@
-# 단일 루트 venv 의존성 — 컴포넌트별 매니페스트를 한곳에서 설치한다.
-# 설치:  uv pip install -r requirements.txt   (또는 pip install -r requirements.txt)
-#
-# 컴포넌트별 매니페스트가 source of truth (server 는 Railway 배포도 이 파일을 사용).
+# 루트 venv 의존성. 설치:  uv pip install -r requirements.txt
+# server/requirements.txt 가 source of truth (Railway 배포도 이 파일을 사용).
 -r server/requirements.txt
--r prototype/requirements.txt
