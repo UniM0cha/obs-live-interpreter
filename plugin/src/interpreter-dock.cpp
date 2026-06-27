@@ -114,7 +114,9 @@ InterpreterDock::InterpreterDock(QWidget *parent) : QWidget(parent)
 	reloadSettings();
 	rebuildSourceList();
 	refresh();
-	fetchSpeakers(); /* 저장된 서버 주소로 설교자 목록 초기 로드 */
+	/* fetchSpeakers() 는 여기서 호출하지 않는다 — 이 시점은 load_config 전이라 서버 주소가 비어 있어
+	 * populateSpeakers→onSettingsChanged 가 빈 값으로 저장을 덮어쓴다. FINISHED_LOADING 의
+	 * onConfigLoaded() 에서 load_config 후 호출한다. */
 }
 
 void InterpreterDock::reloadSettings()
@@ -140,6 +142,16 @@ void InterpreterDock::reloadSettings()
 	voiceBox->blockSignals(true);
 	voiceBox->setChecked(e.voice_conversion());
 	voiceBox->blockSignals(false);
+}
+
+/* FINISHED_LOADING 에서 load_config 직후 1회 호출. 로드된 값으로 UI 를 채운 뒤 저장 가드를 풀고,
+ * 그제서야 정상 서버 주소로 설교자 목록을 조회한다. (생성자에서 하면 load 전이라 빈 값이 저장됨) */
+void InterpreterDock::onConfigLoaded()
+{
+	reloadSettings();
+	rebuildSourceList();
+	configReady_ = true; /* 이제부터 사용자/조회에 의한 변경은 정상 저장된다 */
+	fetchSpeakers();     /* 로드된 server_url 로 /speakers 조회 */
 }
 
 void InterpreterDock::rebuildSourceList()
@@ -173,6 +185,8 @@ void InterpreterDock::onSourceItemChanged(QListWidgetItem *)
 
 void InterpreterDock::onSettingsChanged()
 {
+	if (!configReady_)
+		return; /* 설정 로드 전 — 빈 UI 값으로 기존 저장(server_url/service_key)을 덮어쓰지 않는다 */
 	InterpreterEngine::instance().configure(serverEdit->text().toStdString(), keyEdit->text().toStdString(),
 						engineBox->currentData().toString().toStdString(),
 						speakerBox->currentData().toString().toStdString(),

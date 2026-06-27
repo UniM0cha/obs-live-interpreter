@@ -23,6 +23,7 @@ public:
 public slots:
 	void rebuildSourceList(); /* 오디오 소스 목록 재구성 (GUI 스레드에서 호출) */
 	void reloadSettings();    /* 엔진 설정값을 입력 필드에 로드 (config 로드 후) */
+	void onConfigLoaded();    /* FINISHED_LOADING: load_config 후 UI 반영 + 저장 가드 해제 */
 
 private slots:
 	void onToggle();
@@ -45,5 +46,6 @@ private:
 	QLabel *monitor = nullptr;
 	QPushButton *button = nullptr;
 	bool buildingList = false;           /* 재구성 중 itemChanged 무시 */
+	bool configReady_ = false;           /* load_config 완료 전 onSettingsChanged 저장 차단 */
 	std::atomic<int> fetchGen_{0};       /* /speakers 요청 세대 — 늦게 도착한 옛 응답 무시 */
 };

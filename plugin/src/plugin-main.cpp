@@ -52,10 +52,10 @@ static void on_frontend_event(enum obs_frontend_event ev, void *)
 	switch (ev) {
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		InterpreterEngine::instance().load_config(); /* 이 시점에 소스 존재 → 콜백 등록됨 */
-		if (g_dock) {
-			QMetaObject::invokeMethod(g_dock, "reloadSettings", Qt::QueuedConnection);
-			QMetaObject::invokeMethod(g_dock, "rebuildSourceList", Qt::QueuedConnection);
-		}
+		/* load_config 직후에만 UI 반영 + 저장 가드 해제 + 설교자 조회 (도크 생성자에서 하면 load 전이라
+		 * 빈 값으로 저장이 덮어써짐). 반드시 load_config 뒤에 호출. */
+		if (g_dock)
+			QMetaObject::invokeMethod(g_dock, "onConfigLoaded", Qt::QueuedConnection);
 		break;
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
 		queue_rebuild();
