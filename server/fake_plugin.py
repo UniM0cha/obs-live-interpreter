@@ -78,7 +78,7 @@ async def main():
         pcm = resample_s16(pcm, 16000, target_rate)
         print(f"리샘플 16k→{target_rate//1000}k ({args.engine})")
 
-    print(f"연결: {url}")
+    print("연결:", url.replace(SERVICE_KEY, "***"))  # 서비스 키는 로그에 남기지 않는다
     async with websockets.connect(url) as ws:
         print(f"ingress 연결됨 → {len(pcm)} bytes 송신 시작 ({len(pcm)/2/target_rate:.1f}s, {target_rate//1000}kHz)")
         for i in range(0, len(pcm), chunk):
