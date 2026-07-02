@@ -72,12 +72,15 @@ if(_njson_inc)
   target_include_directories(${CMAKE_PROJECT_NAME} SYSTEM PRIVATE ${_njson_inc})
 endif()
 
-# macOS SDK 26+ 에서 AGL 프레임워크 제거됨. Qt6 FindWrapOpenGL 이 라이브 FS 의
-# /System/Library/Frameworks/AGL.framework 를 find_library 로 찾아 -framework AGL 을 링크하지만,
-# SDK(MacOSX26.5) 에는 AGL 이 없어 "ld: framework 'AGL' not found" 로 실패한다.
-# find_library 결과를 빈 값으로 고정해 AGL 링크를 차단(find_package(Qt6)/WrapOpenGL 전에 실행).
+# macOS SDK 26+ 에서 AGL 프레임워크 제거됨. Qt6::Gui 가 의존하는 FindWrapOpenGL.cmake 는
+# find_library(WrapOpenGL_AGL) 실패 시에도 "-framework AGL" 을 하드코딩 폴백으로 링크하므로
+# (캐시 변수를 비우는 방식으로는 차단 불가) "ld: framework 'AGL' not found" 로 실패한다.
+# FindWrapOpenGL.cmake 는 WrapOpenGL::WrapOpenGL 타깃이 이미 존재하면 즉시 반환하므로,
+# find_package(Qt6)/obs-frontend-api 전에 타깃을 직접 만들어 AGL 없이 OpenGL 만 링크한다.
+# (플러그인은 AGL 심볼을 쓰지 않아 구 SDK 의 CI 러너에서도 동일하게 안전.)
 if(APPLE)
-  set(WrapOpenGL_AGL "" CACHE FILEPATH "AGL disabled (removed in macOS SDK 26+)" FORCE)
+  add_library(WrapOpenGL::WrapOpenGL INTERFACE IMPORTED GLOBAL)
+  target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE "-framework OpenGL")
 endif()
 
 if(ENABLE_FRONTEND_API)
