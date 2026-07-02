@@ -25,6 +25,8 @@ InterpreterEngine &InterpreterEngine::instance()
 InterpreterEngine::InterpreterEngine()
 {
 	ws_.setOnMessageCallback([this](const ix::WebSocketMessagePtr &m) { on_ws_message(m); });
+	/* 네트워크 전환 등으로 조용히 죽은 연결 감지 — pong 미수신이면 close 되어 자동 재연결이 트리거된다 */
+	ws_.setPingInterval(5);
 	running_ = true;
 	mix_worker_ = std::thread(&InterpreterEngine::mix_worker_fn, this);
 	ws_worker_ = std::thread(&InterpreterEngine::ws_worker_fn, this);

@@ -54,16 +54,48 @@
        예배가 시작되면 자동으로 통역 음성이 나옵니다.</div>
 </main>
 <script>
-const LANGS = [
+const LANGS = [   // 서버 app.py 의 ALLOWED_LANGS 와 동기 유지
   { code: "en", name: "English" },
   { code: "vi", name: "Tiếng Việt" },
   { code: "zh", name: "中文" },
   { code: "ja", name: "日本語" },
 ];
 const OUT_RATE = 24000;
+const START_LEAD = 0.15;     // 재생 시작 리드타임(초)
+const UNDERRUN_LEAD = 0.05;  // 언더런 복구 리드(초)
+const MAX_BACKLOG = 1.0;     // 이만큼 밀리면 쌓인 오디오를 버리고 라이브로 점프(초)
+const HB_PERIOD_MS = 4000;   // 하트비트 점검 주기
+const HB_TIMEOUT_MS = 8000;  // 수신 공백 허용치 — 초과 시 죽은 연결로 판정
+const CONNECT_TIMEOUT_MS = 8000; // CONNECTING 에서 멈춘 소켓 회수(네트워크 전환 중 open/close 무소식 대비)
+const BACKOFF_MIN_MS = 1000; // 재연결 백오프 시작
+const BACKOFF_MAX_MS = 15000;
 
-let selected = localStorage.getItem("lang") || "en";
-let ws = null, audioCtx = null, playHead = 0, listening = false, live = false;
+const State = {
+  IDLE: "idle",                 // 사용자가 중지한 상태 — 절대 재연결하지 않음
+  CONNECTING: "connecting",
+  LISTENING: "listening",
+  RECONNECTING: "reconnecting",
+};
+
+// 단일 상태 소스 — 소켓·오디오·UI 는 전부 여기서 파생
+const app = {
+  state: State.IDLE,
+  live: false,                  // 서버 status.live
+  // localStorage 의 낡은/조작된 값이 서버 화이트리스트에 없으면 무한 재연결 루프가
+  // 되므로 LANGS 목록으로 클램프
+  lang: LANGS.some((l) => l.code === localStorage.getItem("lang"))
+      ? localStorage.getItem("lang") : "en",
+  ws: null,                     // 항상 최대 1개
+  generation: 0,                // stop/재연결마다 +1 — 옛 세대의 in-flight 청크 폐기용
+  audioCtx: null,               // 페이지당 1개 재사용
+  masterGain: null,             // 현 세대 출력 게이트 — 끊으면 예약된 소스까지 침묵
+  playHead: 0,
+  backoffMs: 0,
+  reconnectTimer: null,
+  connectTimer: null,
+  hbTimer: null,
+  lastRecvAt: 0,                // 마지막 수신 시각(performance.now) — 생존 판정 기준
+};
 
 const statusEl = document.getElementById("status");
 const toggleEl = document.getElementById("toggle");
@@ -76,12 +108,12 @@ function renderLangs() {
   langsEl.innerHTML = "";
   for (const l of LANGS) {
     const b = document.createElement("button");
-    b.className = "lang" + (l.code === selected ? " sel" : "");
+    b.className = "lang" + (l.code === app.lang ? " sel" : "");
     b.textContent = l.name;
     b.onclick = () => {
-      selected = l.code; localStorage.setItem("lang", l.code);
+      app.lang = l.code; localStorage.setItem("lang", l.code);
       renderLangs();
-      if (listening) { stop(); start(); }  // 언어 바꾸면 재접속
+      if (app.state !== State.IDLE) reconnectNow({ resetCaption: true });  // 듣는 중이면 새 언어로 재접속
     };
     langsEl.appendChild(b);
   }
@@ -90,6 +122,21 @@ function renderLangs() {
 function setStatus(text, isLive) {
   statusEl.textContent = text;
   statusEl.classList.toggle("live", !!isLive);
+}
+
+function renderUI() {
+  const on = app.state !== State.IDLE;
+  toggleEl.textContent = on ? "듣기 중지" : "듣기 시작";
+  toggleEl.classList.toggle("stop", on);
+  if (app.state === State.IDLE) setStatus("대기 — 언어를 고르고 듣기 시작", false);
+  else if (app.state === State.CONNECTING) setStatus("연결 중…", false);
+  else if (app.state === State.RECONNECTING) setStatus("재연결 중…", false);
+  else setStatus(app.live ? "● 통역 진행 중 (LIVE)" : "대기 중 — 진행 중인 예배 없음", app.live);
+}
+
+function setState(next) {
+  app.state = next;
+  renderUI();
 }
 
 function clearCaption() {
@@ -109,68 +156,227 @@ function addCaption(delta) {
   }
 }
 
-function start() {
-  clearCaption();
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  audioCtx.resume();
-  playHead = audioCtx.currentTime + 0.15;
+/* ── 오디오: 세대별 GainNode 로 격리 — stop/재연결 시 예약된 소스까지 한 번에 침묵 ── */
+
+function ensureAudio() {
+  if (!app.audioCtx) app.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return app.audioCtx;
+}
+
+function resumeAudio() {
+  const ctx = app.audioCtx;
+  // iOS 는 백그라운드에서 "interrupted" 상태로도 감
+  if (ctx && (ctx.state === "suspended" || ctx.state === "interrupted")) ctx.resume().catch(() => {});
+}
+
+function openAudioGeneration() {
+  const ctx = ensureAudio();
+  killAudioGeneration();
+  app.masterGain = ctx.createGain();
+  app.masterGain.connect(ctx.destination);
+  app.playHead = ctx.currentTime + START_LEAD;
+}
+
+function killAudioGeneration() {
+  const g = app.masterGain;
+  if (!g) return;
+  app.masterGain = null;
+  const ctx = app.audioCtx;
+  try {
+    // 클릭음 방지 20ms 램프 후 그래프에서 분리
+    g.gain.cancelScheduledValues(ctx.currentTime);
+    g.gain.setValueAtTime(g.gain.value, ctx.currentTime);
+    g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.02);
+    setTimeout(() => { try { g.disconnect(); } catch (_) {} }, 50);
+  } catch (_) {
+    try { g.disconnect(); } catch (_) {}
+  }
+}
+
+function playChunk(int16, gen) {
+  if (gen !== app.generation) return;  // stop/재연결 직후 도착한 옛 세대 청크 폐기
+  const ctx = app.audioCtx;
+  if (!ctx || !app.masterGain) return;
+  const now = ctx.currentTime;
+  if (app.playHead > now + MAX_BACKLOG)
+    openAudioGeneration();  // 백그라운드 등으로 밀린 예약 오디오 폐기 → 라이브 점프
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
+  const buf = ctx.createBuffer(1, f32.length, OUT_RATE);
+  buf.getChannelData(0).set(f32);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(app.masterGain);
+  if (app.playHead < ctx.currentTime) app.playHead = ctx.currentTime + UNDERRUN_LEAD;  // 언더런이면 약간 미래로
+  src.start(app.playHead);
+  app.playHead += buf.duration;
+}
+
+/* ── 소켓: start/stop/재연결 ── */
+
+function teardownSocket(sock) {
+  if (!sock) return;
+  sock.onopen = sock.onmessage = sock.onerror = sock.onclose = null;  // 지연 콜백 무력화
+  try { sock.close(); } catch (_) {}
+  if (app.ws === sock) app.ws = null;
+}
+
+function clearTimers() {
+  clearTimeout(app.reconnectTimer);
+  app.reconnectTimer = null;
+  clearTimeout(app.connectTimer);
+  app.connectTimer = null;
+  stopHeartbeat();
+}
+
+function connect() {
+  clearTimers();
+  app.generation += 1;
+  const gen = app.generation;
+  teardownSocket(app.ws);      // 재진입 가드 — 소켓은 항상 1개만
+  openAudioGeneration();
+  setState(app.backoffMs === 0 ? State.CONNECTING : State.RECONNECTING);
+
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/listen?lang=${selected}`);
-  ws.binaryType = "arraybuffer";
-  ws.onmessage = (ev) => {
+  const sock = new WebSocket(`${proto}://${location.host}/listen?lang=${app.lang}`);
+  sock.binaryType = "arraybuffer";
+  app.ws = sock;
+
+  // CONNECTING 에서 굳은 소켓 회수 — open/close 어느 쪽도 안 오면 백오프 재시도로 전환
+  app.connectTimer = setTimeout(() => {
+    if (sock === app.ws && sock.readyState === WebSocket.CONNECTING) {
+      teardownSocket(sock);
+      scheduleReconnect();
+    }
+  }, CONNECT_TIMEOUT_MS);
+
+  sock.onopen = () => {
+    if (sock !== app.ws) return;  // 교체된 옛 소켓의 콜백 무시(이하 동일)
+    clearTimeout(app.connectTimer);
+    app.connectTimer = null;
+    app.backoffMs = 0;
+    app.lastRecvAt = performance.now();
+    setState(State.LISTENING);
+    startHeartbeat();
+  };
+  sock.onmessage = (ev) => {
+    if (sock !== app.ws) return;
+    app.lastRecvAt = performance.now();  // 모든 수신이 생존 신호(pong 포함)
+    if (app.state === State.RECONNECTING) setState(State.LISTENING);  // 가짜 offline 이벤트 복구
     if (typeof ev.data === "string") {
-      const m = JSON.parse(ev.data);
-      if (m.type === "status") { live = m.live; updateStatus(); }
-      else if (m.type === "transcript") { addCaption(m.text); }
+      let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+      if (m.type === "status") { app.live = m.live; renderUI(); }
+      else if (m.type === "transcript") addCaption(m.text);
       return;
     }
-    playChunk(new Int16Array(ev.data));
+    playChunk(new Int16Array(ev.data), gen);
   };
-  ws.onclose = () => { if (listening) setStatus("재연결 중…", false); };
-  ws.onopen = () => updateStatus();
-  listening = true;
-  toggleEl.textContent = "듣기 중지";
-  toggleEl.classList.add("stop");
-  toggleEl.disabled = false;
+  sock.onclose = () => {
+    if (sock !== app.ws) return;
+    clearTimeout(app.connectTimer);
+    app.connectTimer = null;
+    stopHeartbeat();
+    killAudioGeneration();
+    if (app.state === State.IDLE) return;  // 사용자가 중지한 경우
+    scheduleReconnect();
+  };
+}
+
+function scheduleReconnect() {
+  setState(State.RECONNECTING);
+  app.backoffMs = app.backoffMs ? Math.min(app.backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_MIN_MS;
+  clearTimeout(app.reconnectTimer);
+  app.reconnectTimer = setTimeout(connect, app.backoffMs + Math.random() * 300);
+}
+
+function start() {
+  if (app.state !== State.IDLE) return;  // 연타 가드
+  ensureAudio();
+  resumeAudio();  // 사용자 제스처 안에서 resume(iOS 자동재생 정책)
+  app.backoffMs = 0;
+  clearCaption();
+  connect();
 }
 
 function stop() {
-  listening = false;
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
-  toggleEl.textContent = "듣기 시작";
-  toggleEl.classList.remove("stop");
-  updateStatus();
+  setState(State.IDLE);  // 먼저 IDLE — 이후 어떤 onclose 도 재연결하지 않게
+  clearTimers();
+  app.backoffMs = 0;
+  app.generation += 1;   // in-flight 청크 폐기
+  killAudioGeneration();
+  teardownSocket(app.ws);
 }
 
-function updateStatus() {
-  if (!listening) { setStatus("대기 — 언어를 고르고 듣기 시작", false); return; }
-  setStatus(live ? "● 통역 진행 중 (LIVE)" : "대기 중 — 진행 중인 예배 없음", live);
+// 즉시 재접속(백오프 없이) — 언어 변경·죽은 소켓 판정·online 복귀 공용.
+// 타이머/하트비트/기존 소켓/오디오 세대 정리는 전부 connect() 가 일괄 수행한다.
+function reconnectNow({ resetCaption = false } = {}) {
+  app.backoffMs = 0;
+  if (resetCaption) clearCaption();
+  connect();
 }
 
-function playChunk(int16) {
-  if (!audioCtx) return;
-  const f32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
-  const buf = audioCtx.createBuffer(1, f32.length, OUT_RATE);
-  buf.getChannelData(0).set(f32);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  if (playHead < now) playHead = now + 0.05;  // 언더런이면 약간 미래로
-  src.start(playHead);
-  playHead += buf.duration;
+/* ── 하트비트: WiFi↔셀룰러 전환처럼 "조용히 죽는" 연결 감지 ── */
+
+function pingNow() {
+  const sock = app.ws;
+  if (sock && sock.readyState === WebSocket.OPEN) {
+    try { sock.send('{"type":"ping"}'); } catch (_) {}
+  }
 }
+
+function startHeartbeat() {
+  stopHeartbeat();
+  app.hbTimer = setInterval(() => {
+    const silence = performance.now() - app.lastRecvAt;
+    if (silence > HB_TIMEOUT_MS) { reconnectNow(); return; }
+    if (silence > HB_PERIOD_MS) pingNow();  // LIVE 중엔 오디오/status 수신이 있어 ping 생략됨
+  }, HB_PERIOD_MS);
+}
+
+function stopHeartbeat() {
+  clearInterval(app.hbTimer);
+  app.hbTimer = null;
+}
+
+/* ── 페이지 수명주기 ── */
+
+function checkSocketHealth() {
+  if (app.state === State.IDLE) return;
+  const sock = app.ws;
+  if (sock && sock.readyState === WebSocket.CONNECTING) return;  // 연결 시도 중 — connect 타임아웃이 감시
+  const stale = performance.now() - app.lastRecvAt > HB_TIMEOUT_MS;
+  if (!sock || sock.readyState !== WebSocket.OPEN || stale) {
+    reconnectNow();
+  } else {
+    pingNow();  // 살아 보이면 ping 으로 확인 — 죽었으면 하트비트 타임아웃이 잡음
+    if (!app.hbTimer) startHeartbeat();
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || app.state === State.IDLE) return;
+  resumeAudio();
+  const ctx = app.audioCtx;
+  if (ctx && app.masterGain && app.playHead > ctx.currentTime + MAX_BACKLOG)
+    openAudioGeneration();  // 백그라운드 동안 쌓인 예약 오디오 폐기 → 라이브 점프
+  checkSocketHealth();
+});
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted && app.state !== State.IDLE) { resumeAudio(); checkSocketHealth(); }  // bfcache 복귀
+});
+window.addEventListener("pagehide", () => { stopHeartbeat(); });  // bfcache 진입 — 소켓·상태는 보존
+window.addEventListener("online", () => { if (app.state !== State.IDLE) reconnectNow(); });
+window.addEventListener("offline", () => { if (app.state === State.LISTENING) setState(State.RECONNECTING); });
 
 // 사용자가 위로 스크롤하면 자동 스크롤 정지, 바닥 근처(<24px)로 오면 재개
 captionEl.addEventListener("scroll", () => {
   stick = captionEl.scrollHeight - captionEl.scrollTop - captionEl.clientHeight < 24;
 });
 
-toggleEl.onclick = () => { listening ? stop() : start(); };
+toggleEl.onclick = () => { app.state === State.IDLE ? start() : stop(); };
 renderLangs();
-updateStatus();
 clearCaption();
+setState(State.IDLE);
 toggleEl.disabled = false;
 </script>
 </body>

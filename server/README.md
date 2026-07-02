@@ -62,3 +62,19 @@ python fake_plugin.py
 - `SPEAKERS_JSON` — 설교자 음색 목록. **실명은 코드에 박지 않고 여기(서버 env)에만** 둔다. 한 줄 JSON:
   `{"hong":{"label":"홍길동 목사","voice_id":"<ElevenLabs voice_id>"}}` (key=식별자, label=드롭다운 표시명, voice_id=ElevenLabs IVC).
   미설정이면 음색 변환 비활성. 설교자 추가/변경은 이 값만 수정하면 됨(플러그인 재빌드 불필요).
+
+## 음색·용어 한계와 운영 가이드 (2026-07-02 공식 문서 확인)
+
+- **번역 엔진 원본 음성은 음색을 고를 수 없다.** Gemini(voice replication)·OpenAI(dynamic voice
+  adaptation) 모두 화자 톤을 따라가는 방식이라 음색 선택/고정 파라미터가 없고, **긴 침묵 후
+  음색이 바뀌는 현상은 공식 문서에 명시된 모델 한계**다(버그 아님).
+- **음색 고정이 필요하면 음색 변환을 켠다.** 설교자 클론이 없어도 ElevenLabs 라이브러리의
+  스톡 voice 를 `SPEAKERS_JSON` 에 등록하면 된다(코드 변경 불필요):
+  `{"default":{"label":"기본 음색(고정)","voice_id":"<스톡 voice_id>"}}`
+  트레이드오프: 문장 단위 합성이라 지연이 늘고, ElevenLabs 사용료가 들며, 원본 운율은 사라진다.
+- **용어집(glossary)·커스텀 프롬프트는 두 번역 API 모두 미지원.** 고유명사·전문용어
+  (예: "신내림", 인명) 오역은 현재 API 차원에서 교정할 수 없다 — preview 모델이므로
+  업데이트를 주기적으로 재확인.
+- 출처(1차): [Gemini live-translate 문서](https://ai.google.dev/gemini-api/docs/live-api/live-translate) ·
+  [Gemini 3.5 Audio 모델 카드](https://deepmind.google/models/model-cards/gemini-3-5-audio/) ·
+  [OpenAI realtime-translation 가이드](https://developers.openai.com/api/docs/guides/realtime-translation)

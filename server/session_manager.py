@@ -3,6 +3,8 @@
 핵심 규칙:
 - 한 언어 = 번역 세션 1개. 같은 언어 청취자들은 이 세션 출력을 공유.
 - 세션은 (서비스 LIVE) AND (그 언어 구독자 ≥ 1) 일 때만 ON → 낭비/비용 방지.
+  단, 마지막 구독자가 끊기면 SUB_GRACE_SEC 동안 세션 연결만 유지하고 입력 feed 는
+  중단(비용 0에 가깝게) — 폰 순간 재접속 시 teardown/재기동(수 초 공백)을 피한다.
 - 공유 한국어 PCM 을 활성 세션 전부에 fan-out 입력.
 - 엔진은 ingress(=OBS 플러그인)가 고른 값을 SessionManager.set_live(engine=) 로 받는다.
 - 두 엔진 출력 모두 24kHz PCM16 mono → 폰 재생 경로 무변경.
@@ -35,6 +37,7 @@ OPENAI_IN_RATE = 24000   # OpenAI 입력: 24kHz mono 16-bit (플러그인이 24k
 
 OUT_RATE = 24000  # 양 엔진 공통 출력: 24kHz mono 16-bit
 IN_Q_MAX = 100    # 입력 큐 상한(≈10s @100ms). outage 시 무한 증가 방지 — 가득 차면 oldest 드롭.
+SUB_GRACE_SEC = 5.0  # 구독자 0 유예 — 폰 순간 재접속 시 비싼 번역 세션 teardown/재기동 방지
 
 
 class BaseLanguageSession:
@@ -239,10 +242,14 @@ class SessionManager:
         self.subs: dict[str, int] = {}
         self.live = False
         self._lock = asyncio.Lock()
+        self._grace: dict[str, asyncio.Task] = {}  # lang -> 유예 reconcile 태스크(참조 유지로 GC 방지)
 
     def feed_korean(self, pcm: bytes):
-        for s in self.sessions.values():
-            s.feed(pcm)
+        for lang, s in self.sessions.items():
+            # 구독자 0(유예 중) 세션은 연결만 유지하고 입력은 중단 — 유예 동안
+            # 유료 입력 토큰이 나가지 않게 (비용 게이팅: LIVE AND 구독자>0)
+            if self.subs.get(lang, 0) > 0:
+                s.feed(pcm)
 
     @staticmethod
     def _normalize_engine(engine: str) -> str:
@@ -264,14 +271,39 @@ class SessionManager:
             self.engine = self._normalize_engine(engine)
             if not self._engine_key_ok():
                 log.error("선택 엔진 '%s' 의 API 키가 없습니다 — 세션 미시작. (.env 확인)", self.engine)
+        else:
+            # 서비스 종료 — 구독자 유예 무시하고 즉시 정리
+            for t in self._grace.values():
+                t.cancel()
+            self._grace.clear()
         await self._reconcile()
 
     async def add_subscriber(self, lang: str):
         self.subs[lang] = self.subs.get(lang, 0) + 1
+        grace = self._grace.pop(lang, None)
+        if grace:
+            grace.cancel()  # 유예 중 재구독 — 세션 유지
         await self._reconcile()
 
     async def remove_subscriber(self, lang: str):
         self.subs[lang] = max(0, self.subs.get(lang, 0) - 1)
+        if self.subs.get(lang, 0) == 0 and lang in self.sessions:
+            # 마지막 구독자가 끊김 — 재연결일 수 있으니 언어별 유예 후 재평가.
+            # 타이머는 항상 최신 끊김 기준으로 갱신(플랩핑 시 조기 종료 방지).
+            # 보호할 세션이 있을 때만 예약 — /listen 은 무인증이라 임의 lang 연결/해제로
+            # 유휴 태스크가 쌓이는 것을 막는다.
+            # 밀려 있던 입력 PCM 도 폐기 — 유예 중 무청취 업로드/낡은 번역 방지.
+            self.sessions[lang]._drain_queue()
+            old = self._grace.pop(lang, None)
+            if old:
+                old.cancel()
+            self._grace[lang] = asyncio.create_task(self._reconcile_after_grace(lang))
+        else:
+            await self._reconcile()
+
+    async def _reconcile_after_grace(self, lang: str):
+        await asyncio.sleep(SUB_GRACE_SEC)
+        self._grace.pop(lang, None)
         await self._reconcile()
 
     def active_langs(self):
@@ -287,6 +319,11 @@ class SessionManager:
                 cur = self.sessions.get(lang)
                 running = cur is not None
                 engine_ok = running and cur.ENGINE == self.engine
+                if (not should and running and lang in self._grace
+                        and self.live and engine_ready and cur.ENGINE == self.engine):
+                    # 구독자 0 "만"이 이유일 때만 유예 — live 종료·엔진 교체·키 소실은
+                    # 유예 없이 즉시 정리해야 함(구 엔진 세션이 잘못된 레이트 PCM 을 받는 것 방지)
+                    continue
                 if should and not running:
                     s = self._make_session(lang)
                     self.sessions[lang] = s

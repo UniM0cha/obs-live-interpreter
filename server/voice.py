@@ -66,6 +66,7 @@ class VoiceConverter:
         self.buffers: dict[str, str] = {}             # lang -> 미완성 텍스트
         self.queues: dict[str, asyncio.Queue] = {}
         self.workers: dict[str, asyncio.Task] = {}
+        self.epochs: dict[str, int] = {}              # lang -> clear_pending 세대 (낡은 합성 결과 폐기용)
 
     def set_speaker(self, speaker):
         """speaker key('chae'..) 또는 None. None 이면 음색 변환 비활성."""
@@ -104,21 +105,37 @@ class VoiceConverter:
         else:
             self.buffers.pop(lang, None)
 
+    def clear_pending(self, lang):
+        """해당 언어의 미완성 버퍼 + 대기열 합성 작업 폐기(청취자 0 정리용).
+        in-flight 1건은 취소 불가 — 대신 epoch 를 올려 완료돼도 송출하지 않는다
+        (청취자가 유예 중 재접속해도 공백 이전의 낡은 음성이 재생되지 않게)."""
+        self.buffers.pop(lang, None)
+        self.epochs[lang] = self.epochs.get(lang, 0) + 1
+        q = self.queues.get(lang)
+        if q is None:
+            return
+        while True:
+            try:
+                q.get_nowait()
+                q.task_done()
+            except asyncio.QueueEmpty:
+                break
+
     def _enqueue(self, lang, text):
         q = self.queues.get(lang)
         if q is None:
             q = asyncio.Queue()
             self.queues[lang] = q
             self.workers[lang] = asyncio.create_task(self._worker(lang, q))
-        q.put_nowait((self.voice_id, text))
+        q.put_nowait((self.voice_id, text, self.epochs.get(lang, 0)))
 
     async def _worker(self, lang, q):
         while True:
-            voice_id, text = await q.get()
+            voice_id, text, epoch = await q.get()
             try:
                 pcm = await asyncio.to_thread(self._convert, voice_id, lang, text)
-                if pcm:
-                    await self.send(lang, pcm)
+                if pcm and epoch == self.epochs.get(lang, 0):
+                    await self.send(lang, pcm)  # clear_pending 이전 작업이면 폐기
             except Exception as e:
                 log.warning("[%s] TTS 실패: %s", lang, repr(e)[:180])
             finally:
